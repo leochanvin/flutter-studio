@@ -5,36 +5,96 @@
   <title>Flutter Project Tree Viewer</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body { font-family: system-ui, sans-serif; margin: 24px; }
-    .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-    input, button { padding: 8px; }
-    details { margin-left: 14px; }
-    .file { margin-left: 28px; }
-    .tree { line-height: 1.6; }
-    .hint { color: #666; font-size: 0.9rem; margin-bottom: 12px; }
-    .error { color: #b00020; margin-top: 8px; }
-    .status { color: #0a7; margin-top: 8px; }
-    button[disabled] { opacity: .6; cursor: not-allowed; }
-    pre { background:#f7f7f7;padding:12px;border-radius:8px;overflow:auto;max-height:220px }
+    :root { --bg:#fff; --muted:#667085; --line:#e5e7eb; --chip:#f2f4f7; --accent:#2563eb; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: var(--bg); color:#0b0f19;}
+    header { padding: 20px 24px 12px; border-bottom: 1px solid var(--line); }
+    h1 { margin: 0 0 8px; font-size: 20px; }
+    .hint { color: var(--muted); font-size: 13px; }
+    .toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+    input, button { padding: 8px 10px; border:1px solid var(--line); border-radius:10px; font-size:14px; }
+    input:focus { outline: 2px solid #dbeafe; border-color:#bfdbfe; }
+    button { background:#fff; cursor:pointer; }
+    button.primary { background: var(--accent); color:#fff; border-color: var(--accent); }
+    button[disabled] { opacity:.6; cursor:not-allowed; }
+
+    .status { padding: 8px 24px; font-size: 13px; color: #047857; }
+    .error { padding: 8px 24px; font-size: 13px; color: #b00020; }
+
+    .layout { display:grid; grid-template-columns: 340px 1fr; height: calc(100vh - 160px); }
+    .panel { overflow:auto; }
+    .panel.left { border-right:1px solid var(--line); padding:16px 16px 24px; }
+    .panel.right { padding:16px 16px 24px; }
+    .tree { line-height:1.5; }
+    details { margin-left: 12px; }
+    summary { cursor: pointer; user-select: none; padding:2px 0; }
+    .file { margin-left: 28px; padding:2px 4px; border-radius:6px; cursor:pointer; }
+    .file:hover { background: var(--chip); }
+    .active { background:#eef2ff !important; }
+
+    .preview-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+    .breadcrumbs { font-size: 13px; color: var(--muted); }
+    .actions { display:flex; gap:6px; }
+    .code { background:#0b1020; color:#e6edf3; border-radius:10px; padding:12px; overflow:auto; height: calc(100% - 48px); white-space: pre; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+    .topstrip { border-top:1px solid var(--line); }
+
+    .chips { display:flex; gap:6px; flex-wrap: wrap; }
+    .chip { background:var(--chip); color:#111827; border-radius:999px; padding:4px 10px; font-size:12px; }
+
+    .search { display:flex; gap:8px; margin-bottom:10px; }
+    .divider { height:1px; background:var(--line); margin:10px 0 14px; }
+
+    pre.jsonbox { background:#f7f7f7; border-radius:10px; padding:10px; overflow:auto; max-height:210px; margin: 10px 24px; }
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; height: auto; }
+      .panel.left { border-right:none; border-bottom:1px solid var(--line); }
+    }
   </style>
 </head>
 <body>
-  <h1>Flutter Project Tree</h1>
-  <div class="hint">Colle l’URL Cloud Run (ex: https://…/generate-tree), puis “Générer”.</div>
+  <header>
+    <h1>Flutter Project Tree</h1>
+    <div class="hint">Colle l’URL Cloud Run (ex: https://…/generate-tree), puis “Générer”. Clique sur un fichier pour prévisualiser son contenu.</div>
 
-  <div class="controls">
-    <input id="api" placeholder="https://YOUR-CLOUD-RUN-URL/generate-tree" style="min-width:360px" />
-    <input id="name" placeholder="projectName" value="MonAppli" />
-    <input id="platforms" placeholder="platforms (csv)" value="android,ios,web" />
-    <label><input type="checkbox" id="examples" checked> includeExamples</label>
-    <button id="go">Générer</button>
-  </div>
+    <div class="toolbar">
+      <input id="api" placeholder="https://YOUR-CLOUD-RUN-URL/generate-tree" style="min-width:360px;flex:1 1 320px" />
+      <input id="name" placeholder="projectName" value="MonAppli" />
+      <input id="platforms" placeholder="platforms (csv)" value="android,ios,web" />
+      <label class="chip"><input type="checkbox" id="examples" checked> includeExamples</label>
+      <button id="go" class="primary">Générer</button>
+      <button id="downloadJson">Télécharger JSON</button>
+    </div>
+  </header>
 
   <div id="msg" class="status"></div>
-  <pre id="json"></pre>
-  <div id="out" class="tree"></div>
+
+  <pre id="json" class="jsonbox" aria-label="JSON de l'arborescence"></pre>
+
+  <div class="layout topstrip">
+    <aside class="panel left">
+      <div class="search">
+        <input id="filter" placeholder="Rechercher un fichier/dossier…" style="flex:1" />
+        <button id="clearFilter">✕</button>
+      </div>
+      <div id="out" class="tree" role="tree"></div>
+    </aside>
+
+    <main class="panel right">
+      <div class="preview-head">
+        <div>
+          <div class="breadcrumbs" id="crumbs">Sélectionne un fichier…</div>
+          <div class="chips" id="fileMeta"></div>
+        </div>
+        <div class="actions">
+          <button id="copy">Copier</button>
+        </div>
+      </div>
+      <div id="code" class="code" tabindex="0">// (aucun fichier sélectionné)</div>
+    </main>
+  </div>
 
   <script>
+    // ---------- Elements ----------
     const out = document.getElementById('out');
     const jsonBox = document.getElementById('json');
     const btn = document.getElementById('go');
@@ -43,27 +103,118 @@
     const nameInput = document.getElementById('name');
     const platformsInput = document.getElementById('platforms');
     const examplesInput = document.getElementById('examples');
+    const downloadBtn = document.getElementById('downloadJson');
+    const filterInput = document.getElementById('filter');
+    const clearFilterBtn = document.getElementById('clearFilter');
+    const codeBox = document.getElementById('code');
+    const crumbs = document.getElementById('crumbs');
+    const fileMeta = document.getElementById('fileMeta');
+    const copyBtn = document.getElementById('copy');
 
+    // ---------- Utils ----------
     const el = (tag, attrs={}, ...children) => {
       const n = document.createElement(tag);
-      for (const [k,v] of Object.entries(attrs)) n.setAttribute(k,v);
+      for (const [k,v] of Object.entries(attrs)) {
+        if (k === 'class') n.className = v; else n.setAttribute(k,v);
+      }
       for (const c of children) n.append(c);
       return n;
     };
 
-    function renderNode(node) {
-      if (node.type === 'dir') {
-        const d = el('details', { open: true });
-        const s = el('summary'); s.textContent = `📁 ${node.name}`;
-        d.append(s);
-        (node.children || [])
-          .sort((a,b)=> a.type===b.type ? a.name.localeCompare(b.name) : (a.type==="dir"?-1:1))
-          .forEach(child => d.append(renderNode(child)));
-        return d;
+    const ext = (name) => {
+      const i = name.lastIndexOf('.');
+      return i === -1 ? '' : name.slice(i+1).toLowerCase();
+    };
+
+    // Generate sensible default content for common Flutter files
+    function fileTemplate(pathArr, projectName) {
+      const name = pathArr[pathArr.length-1];
+      const project = projectName || 'flutter_app';
+
+      switch (name) {
+        case 'main.dart':
+          return `import 'package:flutter/material.dart';
+
+void main() => runApp(const MyApp());
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: '${project}',
+      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.blue),
+      home: const Scaffold(
+        body: Center(child: Text('Hello ${project}!')),
+      ),
+    );
+  }
+}
+`;
+        case 'pubspec.yaml':
+          return `name: ${project}
+description: A Flutter starter project
+publish_to: 'none'
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
+`;
+        case 'analysis_options.yaml':
+          return `include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    - prefer_const_constructors
+    - prefer_final_locals
+`;
+        case '.gitignore':
+          return `# Flutter/Dart
+.dart_tool/
+.packages
+.pub-cache/
+build/
+ios/Pods/
+macos/Pods/
+android/.gradle/
+android/app/build/
+lib/generated_plugin_registrant.dart
+
+# IDE
+.vscode/
+.idea/
+*.iml
+`;
+        case 'README.md':
+          return `# ${project}
+
+Generated by Flutter Studio viewer.
+`;
+        case 'widget_test.dart':
+          return `import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  test('dummy', () {
+    expect(1 + 1, 2);
+  });
+}
+`;
+        default:
+          // Generic empty file hint
+          return `(fichier vide)`;
       }
-      const f = el('div', { class: 'file' });
-      f.textContent = `📄 ${node.name}`;
-      return f;
     }
 
     function saveState() {
@@ -93,31 +244,100 @@
         const r = await fetch('config.json', { cache: 'no-store' });
         if (r.ok) {
           const cfg = await r.json();
-          if (cfg?.apiUrl && !apiInput.value) {
-            apiInput.value = cfg.apiUrl;
-          }
+          if (cfg?.apiUrl && !apiInput.value) apiInput.value = cfg.apiUrl;
         }
-      } catch {
-        // silencieux : config.json est optionnel
+      } catch {}
+    }
+
+    // ---------- Tree rendering & interactions ----------
+    let currentTree = null;
+    let currentPath = [];
+    let activeEl = null;
+
+    function renderTree(root, filterText = '') {
+      out.innerHTML = '';
+      out.append(buildNode(root, [], filterText.toLowerCase()));
+    }
+
+    function buildNode(node, path, filterText) {
+      if (node.type === 'dir') {
+        const wrap = el('details', { open: true });
+        const summary = el('summary');
+        summary.textContent = `📁 ${node.name}`;
+        wrap.append(summary);
+
+        const kids = (node.children || [])
+          .slice()
+          .sort((a,b)=> a.type===b.type ? a.name.localeCompare(b.name) : (a.type==="dir"?-1:1));
+
+        for (const child of kids) {
+          wrap.append(buildNode(child, path.concat(node.name), filterText));
+        }
+
+        // Filtering: hide empty directories not matching
+        if (filterText) {
+          const matchesSelf = node.name.toLowerCase().includes(filterText);
+          const hasVisible = [...wrap.children].some(c => c.tagName !== 'SUMMARY');
+          wrap.style.display = (matchesSelf || hasVisible) ? '' : 'none';
+        }
+        return wrap;
+      } else {
+        const fullPath = path.concat(node.name);
+        const div = el('div', { class: 'file', role:'treeitem', 'data-path': fullPath.join('/') });
+        div.textContent = `📄 ${node.name}`;
+        div.addEventListener('click', () => openFile(fullPath));
+        if (filterText && !fullPath.join('/').toLowerCase().includes(filterText)) {
+          div.style.display = 'none';
+        }
+        return div;
       }
     }
 
+    function openFile(pathArr) {
+      // highlight
+      if (activeEl) activeEl.classList.remove('active');
+      const selector = `[data-path="${pathArr.join('/').replace(/(["\\])/g, '\\$1')}"]`;
+      activeEl = out.querySelector(selector);
+      if (activeEl) activeEl.classList.add('active');
+
+      currentPath = pathArr;
+      crumbs.textContent = '/' + pathArr.join('/');
+
+      // meta
+      fileMeta.innerHTML = '';
+      const name = pathArr[pathArr.length-1];
+      const chips = [
+        ['Nom', name],
+        ['Extension', ext(name) || '(none)'],
+        ['Taille', '—'], // pas de contenu réel côté API
+      ];
+      for (const [k,v] of chips) fileMeta.append(el('span',{class:'chip'}, `${k}: ${v}`));
+
+      // content
+      const content = fileTemplate(pathArr, nameInput.value.trim() || 'flutter_app');
+      codeBox.textContent = content;
+    }
+
+    // ---------- API call ----------
     async function generate() {
       msg.textContent = "";
       msg.className = "status";
       out.textContent = "Chargement…";
       jsonBox.textContent = "";
+      codeBox.textContent = "// (aucun fichier sélectionné)";
+      crumbs.textContent = "Sélectionne un fichier…";
+      fileMeta.innerHTML = "";
+      if (activeEl) activeEl.classList.remove('active'); activeEl = null;
       btn.disabled = true;
 
       const api = apiInput.value.trim();
       const projectName = nameInput.value.trim() || 'flutter_app';
-      const platforms = (platformsInput.value || '')
-        .split(',').map(s => s.trim()).filter(Boolean);
+      const platforms = (platformsInput.value || '').split(',').map(s => s.trim()).filter(Boolean);
       const includeExamples = examplesInput.checked;
 
       if (!api) {
         out.textContent = "";
-        msg.textContent = "⚠️ Renseignes l’URL de l’API Cloud Run.";
+        msg.textContent = "⚠️ Renseigne l’URL de l’API Cloud Run.";
         msg.className = "error";
         btn.disabled = false;
         return;
@@ -138,12 +358,12 @@
         }
 
         const data = await res.json();
+        currentTree = data;
+
         jsonBox.textContent = JSON.stringify(data, null, 2);
-        out.innerHTML = "";
-        out.append(renderNode(data));
+        renderTree(data);
         msg.textContent = "✅ Arborescence générée";
         msg.className = "status";
-
         saveState();
       } catch (e) {
         out.textContent = "";
@@ -154,16 +374,48 @@
       }
     }
 
-    // Listeners
-    btn.addEventListener('click', generate);
-    // Entrée ↵ déclenche generate quand focus sur un input
-    [apiInput, nameInput, platformsInput].forEach(inp => {
-      inp.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') generate();
-      });
+    // ---------- Actions ----------
+    downloadBtn.addEventListener('click', () => {
+      const blob = new Blob([jsonBox.textContent || '{}'], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'flutter_tree.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
     });
 
-    // Au chargement : restaurer état et tenter de charger config.json
+    filterInput.addEventListener('input', () => {
+      if (!currentTree) return;
+      renderTree(currentTree, filterInput.value);
+    });
+    clearFilterBtn.addEventListener('click', () => {
+      filterInput.value = '';
+      if (currentTree) renderTree(currentTree);
+    });
+
+    copyBtn.addEventListener('click', async () => {
+      const text = codeBox.textContent || '';
+      try {
+        await navigator.clipboard.writeText(text);
+        copyBtn.textContent = 'Copié ✓';
+        setTimeout(() => copyBtn.textContent = 'Copier', 1200);
+      } catch {
+        // fallback
+        const ta = document.createElement('textarea');
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); document.body.removeChild(ta);
+      }
+    });
+
+    // Entrée ↵ déclenche generate quand focus sur un input principal
+    [apiInput, nameInput, platformsInput].forEach(inp => {
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') generate(); });
+    });
+
+    // Bouton principal
+    btn.addEventListener('click', generate);
+
+    // ---------- Boot ----------
     restoreState();
     loadConfigJson();
   </script>
