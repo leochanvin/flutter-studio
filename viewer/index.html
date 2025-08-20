@@ -12,6 +12,10 @@
     .file { margin-left: 28px; }
     .tree { line-height: 1.6; }
     .hint { color: #666; font-size: 0.9rem; margin-bottom: 12px; }
+    .error { color: #b00020; margin-top: 8px; }
+    .status { color: #0a7; margin-top: 8px; }
+    button[disabled] { opacity: .6; cursor: not-allowed; }
+    pre { background:#f7f7f7;padding:12px;border-radius:8px;overflow:auto;max-height:220px }
   </style>
 </head>
 <body>
@@ -26,12 +30,19 @@
     <button id="go">Générer</button>
   </div>
 
-  <pre id="json" style="background:#f7f7f7;padding:12px;border-radius:8px;overflow:auto;max-height:220px"></pre>
+  <div id="msg" class="status"></div>
+  <pre id="json"></pre>
   <div id="out" class="tree"></div>
 
   <script>
     const out = document.getElementById('out');
     const jsonBox = document.getElementById('json');
+    const btn = document.getElementById('go');
+    const msg = document.getElementById('msg');
+    const apiInput = document.getElementById('api');
+    const nameInput = document.getElementById('name');
+    const platformsInput = document.getElementById('platforms');
+    const examplesInput = document.getElementById('examples');
 
     const el = (tag, attrs={}, ...children) => {
       const n = document.createElement(tag);
@@ -55,35 +66,106 @@
       return f;
     }
 
-    async function generate() {
-      out.textContent = "Chargement…";
-      jsonBox.textContent = "";
-
-      const api = document.getElementById('api').value.trim();
-      const projectName = document.getElementById('name').value.trim() || 'flutter_app';
-      const platforms = (document.getElementById('platforms').value || '')
-        .split(',').map(s => s.trim()).filter(Boolean);
-      const includeExamples = document.getElementById('examples').checked;
-
-      if (!api) { out.textContent = "⚠️ Renseigne l’URL de l’API Cloud Run."; return; }
-
-      const res = await fetch(api, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectName, platforms, includeExamples })
-      });
-      if (!res.ok) {
-        out.textContent = "Erreur API: " + res.status + " " + res.statusText;
-        return;
-      }
-      const data = await res.json();
-
-      jsonBox.textContent = JSON.stringify(data, null, 2);
-      out.innerHTML = "";
-      out.append(renderNode(data));
+    function saveState() {
+      const state = {
+        api: apiInput.value.trim(),
+        projectName: nameInput.value.trim(),
+        platforms: platformsInput.value.trim(),
+        includeExamples: examplesInput.checked,
+      };
+      localStorage.setItem('flutter_studio_viewer_state', JSON.stringify(state));
     }
 
-    document.getElementById('go').addEventListener('click', generate);
+    function restoreState() {
+      try {
+        const raw = localStorage.getItem('flutter_studio_viewer_state');
+        if (!raw) return;
+        const s = JSON.parse(raw);
+        if (s.api) apiInput.value = s.api;
+        if (s.projectName) nameInput.value = s.projectName;
+        if (s.platforms) platformsInput.value = s.platforms;
+        if (typeof s.includeExamples === 'boolean') examplesInput.checked = s.includeExamples;
+      } catch {}
+    }
+
+    async function loadConfigJson() {
+      try {
+        const r = await fetch('config.json', { cache: 'no-store' });
+        if (r.ok) {
+          const cfg = await r.json();
+          if (cfg?.apiUrl && !apiInput.value) {
+            apiInput.value = cfg.apiUrl;
+          }
+        }
+      } catch {
+        // silencieux : config.json est optionnel
+      }
+    }
+
+    async function generate() {
+      msg.textContent = "";
+      msg.className = "status";
+      out.textContent = "Chargement…";
+      jsonBox.textContent = "";
+      btn.disabled = true;
+
+      const api = apiInput.value.trim();
+      const projectName = nameInput.value.trim() || 'flutter_app';
+      const platforms = (platformsInput.value || '')
+        .split(',').map(s => s.trim()).filter(Boolean);
+      const includeExamples = examplesInput.checked;
+
+      if (!api) {
+        out.textContent = "";
+        msg.textContent = "⚠️ Renseigne l’URL de l’API Cloud Run.";
+        msg.className = "error";
+        btn.disabled = false;
+        return;
+      }
+
+      try {
+        const res = await fetch(api, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectName, platforms, includeExamples })
+        });
+
+        if (!res.ok) {
+          out.textContent = "";
+          msg.textContent = "Erreur API: " + res.status + " " + res.statusText;
+          msg.className = "error";
+          return;
+        }
+
+        const data = await res.json();
+        jsonBox.textContent = JSON.stringify(data, null, 2);
+        out.innerHTML = "";
+        out.append(renderNode(data));
+        msg.textContent = "✅ Arborescence générée";
+        msg.className = "status";
+
+        saveState();
+      } catch (e) {
+        out.textContent = "";
+        msg.textContent = "Erreur réseau: " + (e?.message || e);
+        msg.className = "error";
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    // Listeners
+    btn.addEventListener('click', generate);
+    // Entrée ↵ déclenche generate quand focus sur un input
+    [apiInput, nameInput, platformsInput].forEach(inp => {
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') generate();
+      });
+    });
+
+    // Au chargement : restaurer état et tenter de charger config.json
+    restoreState();
+    loadConfigJson();
   </script>
 </body>
 </html>
