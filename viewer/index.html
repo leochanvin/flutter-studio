@@ -54,7 +54,7 @@
 <body>
   <header>
     <h1>Flutter Project Tree</h1>
-    <div class="hint">Colle l’URL Cloud Run (ex: https://…/generate-repo ou la racine du service), puis “Générer” (duplique le template en repo GitHub).</div>
+    <div class="hint">Clique “Générer” pour dupliquer le template en repo GitHub.</div>
 
     <div class="toolbar">
       <input id="name" placeholder="projectName" value="MonAppli" />
@@ -105,6 +105,7 @@
     const crumbs = document.getElementById('crumbs');
     const fileMeta = document.getElementById('fileMeta');
     const copyBtn = document.getElementById('copy');
+    const API_BASE = "https://flutter-studio-api-881278465156.europe-west1.run.app";
 
     const el = (tag, attrs={}, ...children) => {
       const n = document.createElement(tag);
@@ -153,7 +154,7 @@
       const projectName = nameInput.value.trim();
       const owner = ownerInput.value.trim() || 'leochanvin';
 
-      let endpoint = '/generate-repo';
+      let endpoint = API_BASE.replace(/\/$/, '') + '/generate-repo';
 
       try{
         const r = await fetch(endpoint, {
