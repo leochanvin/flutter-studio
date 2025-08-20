@@ -1,5 +1,5 @@
 {
-  "name": "flutter-tree-api",
+  "name": "flutter-studio-api",
   "private": true,
   "type": "module",
   "scripts": { "start": "node index.js" },
