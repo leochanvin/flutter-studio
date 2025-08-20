@@ -98,21 +98,25 @@ app.post("/generate-repo", async (req, res) => {
     const isPrivate = !!req.body?.private;
 
     if (!projectName) return res.status(400).json({ ok: false, error: "missing_project_name" });
-    if (!GH_TOKEN) return res.status(500).json({ ok: false, error: "missing_github_token" });
+    if (!GH_TOKEN)   return res.status(500).json({ ok: false, error: "missing_github_token" });
 
+    // 1) Création immédiate (GitHub "generate")
     const created = await gh(`/repos/${encodeURIComponent(TEMPLATE_OWNER)}/${encodeURIComponent(TEMPLATE_REPO)}/generate`, {
       method: "POST",
       body: JSON.stringify({ owner, name: projectName, private: isPrivate, include_all_branches: false })
     });
 
     const branch = created.default_branch || "main";
+
+    // 2) Tentative rapide (1–3 s) SANS bloquer l'UX
     let tree = null;
     try {
-      tree = await getRepoTreeWithRetry({ owner, repo: created.name, branch });
-    } catch (e) {
-      console.warn("Arbre non prêt après délai, on renvoie quand même:", e.message || e);
+      tree = await getRepoTreeWithRetry({ owner, repo: created.name, branch, tries: 3, interval: 1000 });
+    } catch (_) {
+      // pas grave : l'UI pollera /repo-info ensuite
     }
 
+    // 3) Réponse immédiate
     res.json({ ok: true, owner, repo: created.name, html_url: created.html_url, default_branch: branch, tree });
   } catch (e) {
     console.error(e);
