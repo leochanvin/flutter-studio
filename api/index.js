@@ -40,43 +40,91 @@ async function getRepoTree({ owner, repo, branch = "main" }) {
   );
 }
 
-// ------ Correctif de cohérence éventuelle (409/empty) ------
+// ------ Correctif de cohérence éventuelle (409/empty/404) ------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Convertit la réponse /contents en un arbre minimal {name,type,children}
+function contentsToTree(contents, rootName = "repo") {
+  const root = { name: rootName, type: "dir", children: [] };
+  for (const item of contents) {
+    const parts = (item.path || "").split("/").filter(Boolean);
+    let parent = root;
+    parts.forEach((part, i) => {
+      const isLast = i === parts.length - 1;
+      let node = (parent.children || []).find((c) => c.name === part);
+      if (!node) {
+        node = { name: part, type: isLast && item.type === "file" ? "file" : "dir" };
+        if (node.type === "dir") node.children = [];
+        parent.children.push(node);
+      }
+      parent = node;
+    });
+  }
+  return root;
+}
+
+// Aide pour transformer un arbre imbriqué en liste façon /git/trees
+function flattenNestedTree(node, base = "") {
+  const items = [];
+  if (node.type === "dir" && node.children) {
+    for (const c of node.children) {
+      const path = base ? `${base}/${c.name}` : c.name;
+      items.push({ path, type: c.type === "dir" ? "tree" : "blob" });
+      if (c.type === "dir") items.push(...flattenNestedTree(c, path));
+    }
+  }
+  return items;
+}
+
 /**
- * Attends que la branche existe et que le premier commit soit visible.
- * Puis lit l'arbre via le SHA du commit (plus fiable que via le nom de branche).
+ * Essaie plusieurs méthodes pour récupérer l'arbre et réessaie jusqu'à readiness.
+ * Stratégies par ordre:
+ *  A) /git/trees/{branch}?recursive=1
+ *  B) /branches/{branch} -> sha -> /git/trees/{sha}?recursive=1
+ *  C) /contents?ref={branch}  (converti en shape compatible)
  */
 async function getRepoTreeWithRetry({
   owner,
   repo,
   branch = "main",
-  tries = 20,
-  interval = 1000
+  tries = 60,        // ~2 minutes au total
+  interval = 2000,   // 2s entre essais
 }) {
   for (let i = 0; i < tries; i++) {
+    // A) direct par nom de branche
     try {
-      // 1) Vérifie que la branche existe et récupère le SHA du commit
+      const byBranch = await gh(
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(branch)}?recursive=1`
+      );
+      if (byBranch?.tree?.length) return byBranch;
+    } catch (_) {}
+
+    // B) via SHA du commit de la branche
+    try {
       const br = await gh(
         `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodeURIComponent(branch)}`
       );
       const sha = br?.commit?.sha;
-      if (!sha) throw new Error("branch_has_no_commit");
-
-      // 2) Lit l'arbre par SHA
-      const tree = await gh(
-        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(sha)}?recursive=1`
-      );
-      return tree;
-    } catch (e) {
-      const msg = String(e?.message || e);
-      // On réessaie sur 404/409/empty le temps que GitHub finalise la génération
-      if (msg.includes("404") || msg.includes("409") || msg.toLowerCase().includes("empty")) {
-        await sleep(interval);
-        continue;
+      if (sha) {
+        const bySha = await gh(
+          `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(sha)}?recursive=1`
+        );
+        if (bySha?.tree?.length) return bySha;
       }
-      throw e; // autre erreur -> stop
-    }
+    } catch (_) {}
+
+    // C) fallback via /contents
+    try {
+      const contents = await gh(
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents?ref=${encodeURIComponent(branch)}`
+      );
+      if (Array.isArray(contents) && contents.length) {
+        const minimalTree = contentsToTree(contents, repo);
+        return { sha: null, truncated: false, tree: flattenNestedTree(minimalTree) };
+      }
+    } catch (_) {}
+
+    await sleep(interval);
   }
   throw new Error("timeout_waiting_for_repo_ready");
 }
@@ -114,7 +162,13 @@ app.post("/generate-repo", async (req, res) => {
 
     // 2) Récupère l’arbo (avec retry jusqu’à ce que le premier commit soit visible)
     const branch = created.default_branch || "main";
-    const tree = await getRepoTreeWithRetry({ owner, repo: created.name, branch });
+
+    let tree = null;
+    try {
+      tree = await getRepoTreeWithRetry({ owner, repo: created.name, branch });
+    } catch (retryErr) {
+      console.warn("Arbre non prêt après délai, on renvoie tout de même le repo:", retryErr?.message || retryErr);
+    }
 
     res.json({
       ok: true,
@@ -122,7 +176,7 @@ app.post("/generate-repo", async (req, res) => {
       repo: created.name,
       html_url: created.html_url,
       default_branch: branch,
-      tree
+      tree // peut être null si GitHub n'a pas fini l'indexation
     });
   } catch (e) {
     console.error(e);
