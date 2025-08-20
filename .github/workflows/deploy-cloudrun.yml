@@ -28,17 +28,23 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Build & Push Image
+      - name: Build & Push Image (Artifact Registry)
         run: |
-          IMAGE="gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GCP_SERVICE }}"
+          IMAGE="europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/cloud-run/${{ secrets.GCP_SERVICE }}:${{ github.sha }}"
           gcloud builds submit api --tag "$IMAGE"
 
       - name: Deploy to Cloud Run
         run: |
-          IMAGE="gcr.io/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GCP_SERVICE }}"
+          IMAGE="europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/cloud-run/${{ secrets.GCP_SERVICE }}:${{ github.sha }}"
           gcloud run deploy "${{ secrets.GCP_SERVICE }}" \
             --image "$IMAGE" \
             --region "${{ secrets.GCP_REGION }}" \
             --platform managed \
             --allow-unauthenticated \
             --port 8080
+
+      - name: Show Service URL
+        run: |
+          gcloud run services describe "${{ secrets.GCP_SERVICE }}" \
+            --region "${{ secrets.GCP_REGION }}" \
+            --format='value(status.url)'
