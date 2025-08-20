@@ -76,123 +76,155 @@
     </main>
   </div>
 
-  <script>
-    const API_BASE = "https://flutter-studio-api-881278465156.europe-west1.run.app";
+<script>
+  const API_BASE = "https://flutter-studio-api-881278465156.europe-west1.run.app";
 
-    const out = document.getElementById('out');
-    const jsonBox = document.getElementById('json');
-    const btn = document.getElementById('go');
-    const msg = document.getElementById('msg');
-    const nameInput = document.getElementById('name');
-    const downloadBtn = document.getElementById('downloadJson');
-    const filterInput = document.getElementById('filter');
-    const clearFilterBtn = document.getElementById('clearFilter');
-    const codeBox = document.getElementById('code');
-    const crumbs = document.getElementById('crumbs');
-    const fileMeta = document.getElementById('fileMeta');
-    const copyBtn = document.getElementById('copy');
+  const out = document.getElementById('out');
+  const jsonBox = document.getElementById('json');
+  const btn = document.getElementById('go');
+  const msg = document.getElementById('msg');
+  const nameInput = document.getElementById('name');
+  const downloadBtn = document.getElementById('downloadJson');
+  const filterInput = document.getElementById('filter');
+  const clearFilterBtn = document.getElementById('clearFilter');
+  const codeBox = document.getElementById('code');
+  const crumbs = document.getElementById('crumbs');
+  const fileMeta = document.getElementById('fileMeta');
+  const copyBtn = document.getElementById('copy');
 
-    const el = (tag, attrs={}, ...children) => {
-      const n = document.createElement(tag);
-      for (const [k,v] of Object.entries(attrs)) { if (k==='class') n.className=v; else n.setAttribute(k,v); }
-      for (const c of children) n.append(c);
-      return n;
-    };
+  const el = (tag, attrs={}, ...children) => {
+    const n = document.createElement(tag);
+    for (const [k,v] of Object.entries(attrs)) { if (k==='class') n.className=v; else n.setAttribute(k,v); }
+    for (const c of children) n.append(c);
+    return n;
+  };
 
-    function flatToNestedTree(ghTree, rootName) {
-      const root = { name: rootName || 'repo', type: 'dir', children: [] };
-      if (!ghTree || !Array.isArray(ghTree.tree)) return root;
-      for (const item of ghTree.tree) {
-        const parts = (item.path || '').split('/').filter(Boolean);
-        let parent = root;
-        for (let i=0;i<parts.length;i++){
-          const part = parts[i];
-          const isLast = i === parts.length - 1;
-          if (isLast) {
-            parent.children.push({ name: part, type: item.type === 'tree' ? 'dir' : 'file' });
-          } else {
-            let node = (parent.children || []).find(c => c.type==='dir' && c.name===part);
-            if (!node) { node = { name: part, type:'dir', children: [] }; parent.children.push(node); }
-            parent = node;
-          }
+  function flatToNestedTree(ghTree, rootName) {
+    const root = { name: rootName || 'repo', type: 'dir', children: [] };
+    if (!ghTree || !Array.isArray(ghTree.tree)) return root;
+    for (const item of ghTree.tree) {
+      const parts = (item.path || '').split('/').filter(Boolean);
+      let parent = root;
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        const isLast = i === parts.length - 1;
+        if (isLast) {
+          parent.children.push({ name: part, type: item.type === 'tree' ? 'dir' : 'file' });
+        } else {
+          let node = (parent.children || []).find(c => c.type === 'dir' && c.name === part);
+          if (!node) { node = { name: part, type: 'dir', children: [] }; parent.children.push(node); }
+          parent = node;
         }
       }
-      return root;
     }
+    return root;
+  }
 
-    function renderTree(root, filterText='') {
-      if (!root) return;
-      out.innerHTML = '';
-      out.append(buildNode(root, [], filterText.toLowerCase()));
-    }
+  function renderTree(root) {
+    if (!root) return;
+    out.innerHTML = '';
+    out.append(buildNode(root, []));
+  }
 
-    function buildNode(node, path, filterText) {
-      if (node.type === 'dir') {
-        const wrap = el('details', { open: true });
-        wrap.append(el('summary', {}, '📁 ' + node.name));
-        for (const child of (node.children || [])) {
-          wrap.append(buildNode(child, path.concat(node.name), filterText));
-        }
-        return wrap;
-      } else {
-        const full = path.concat(node.name);
-        const div = el('div', { class:'file', 'data-path': full.join('/') }, '📄 ' + node.name);
-        div.addEventListener('click', () => openFile(full));
-        return div;
+  function buildNode(node, path) {
+    if (node.type === 'dir') {
+      const wrap = el('details', { open: true });
+      wrap.append(el('summary', {}, '📁 ' + node.name));
+      for (const child of (node.children || [])) {
+        wrap.append(buildNode(child, path.concat(node.name)));
       }
+      return wrap;
+    } else {
+      const full = path.concat(node.name);
+      const div = el('div', { class: 'file', 'data-path': full.join('/') }, '📄 ' + node.name);
+      div.addEventListener('click', () => openFile(full));
+      return div;
     }
+  }
 
-    function openFile(pathArr) {
-      crumbs.textContent = '/' + pathArr.join('/');
-      fileMeta.innerHTML = '';
-      fileMeta.append(el('span', {class:'chip'}, 'Nom: ' + pathArr[pathArr.length-1]));
-      codeBox.textContent = '(fichier non chargé depuis API)';
-    }
+  function openFile(pathArr) {
+    crumbs.textContent = '/' + pathArr.join('/');
+    fileMeta.innerHTML = '';
+    fileMeta.append(el('span', { class: 'chip' }, 'Nom: ' + pathArr[pathArr.length - 1]));
+    codeBox.textContent = '(fichier non chargé depuis API)';
+  }
 
-    async function generate() {
-      btn.disabled = true;
-      msg.className = 'status';
-      msg.textContent = 'Création du dépôt…';
-      out.textContent = '';
-      jsonBox.textContent = '';
+  // --- NEW: polling until the repo tree is ready ---
+  async function pollRepoInfo({ owner, repo, branch }, { tries = 60, interval = 2000 } = {}) {
+    for (let i = 0; i < tries; i++) {
       try {
-        const r = await fetch(API_BASE + '/generate-repo', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ projectName: nameInput.value.trim() || 'flutter_studio', private: false })
-        });
+        const u = new URL(API_BASE + '/repo-info');
+        u.searchParams.set('owner', owner);
+        u.searchParams.set('repo', repo);
+        u.searchParams.set('branch', branch || 'main');
+
+        const r = await fetch(u.toString());
+        if (!r.ok) throw new Error('HTTP ' + r.status);
         const data = await r.json();
-        if (!data.ok) throw new Error(data.message || 'Erreur inconnue');
 
-        if (data.tree == null) {
-          msg.innerHTML = '✅ Dépôt créé : <a target="_blank" href="'+data.html_url+'">'+data.html_url+'</a> · Indexation en cours… réessaie dans quelques secondes.';
-          jsonBox.textContent = 'null';
-          return;
+        if (data && Array.isArray(data.tree) && data.tree.length) {
+          return data; // tree ready
         }
-
-        const nested = flatToNestedTree(data.tree, data.repo || (nameInput.value || 'repo'));
-        jsonBox.textContent = JSON.stringify(nested, null, 2);
-        renderTree(nested);
-        msg.innerHTML = '✅ Dépôt créé : <a target="_blank" href="'+data.html_url+'">'+data.html_url+'</a>';
-      } catch (e) {
-        msg.className = 'error';
-        msg.textContent = 'Erreur: ' + (e?.message || e);
-      } finally {
-        btn.disabled = false;
-      }
+      } catch (_) {}
+      msg.className = 'status';
+      msg.textContent = `Indexation GitHub en cours… (tentative ${i + 1})`;
+      await new Promise(res => setTimeout(res, interval));
     }
+    throw new Error('timeout_waiting_for_repo_ready');
+  }
 
-    downloadBtn.addEventListener('click', () => {
-      const blob = new Blob([jsonBox.textContent || '{}'], { type: 'application/json' });
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'flutter_tree.json'; a.click();
-      URL.revokeObjectURL(a.href);
-    });
-    filterInput.addEventListener('input', () => {});
-    clearFilterBtn.addEventListener('click', () => { filterInput.value=''; });
-    copyBtn.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(codeBox.textContent || ''); copyBtn.textContent='Copié ✓'; setTimeout(()=>copyBtn.textContent='Copier',1200); } catch {}
-    });
-    btn.addEventListener('click', generate);
-  </script>
+  async function generate() {
+    btn.disabled = true;
+    msg.className = 'status';
+    msg.textContent = 'Création du dépôt…';
+    out.textContent = '';
+    jsonBox.textContent = '';
+    try {
+      const r = await fetch(API_BASE + '/generate-repo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectName: nameInput.value.trim() || 'flutter_studio', private: false })
+      });
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.message || 'Erreur inconnue');
+
+      const owner = data.owner;
+      const repo  = data.repo;
+      const branch = data.default_branch || 'main';
+
+      // Si l’arbre n’est pas prêt, on poll automatiquement jusqu’à ce qu’il apparaisse
+      let ghTree = data.tree;
+      if (!ghTree) {
+        msg.innerHTML = '✅ Dépôt créé : <a target="_blank" href="'+data.html_url+'">'+data.html_url+'</a> · Indexation en cours…';
+        ghTree = await pollRepoInfo({ owner, repo, branch });
+      } else {
+        msg.innerHTML = '✅ Dépôt créé : <a target="_blank" href="'+data.html_url+'">'+data.html_url+'</a>';
+      }
+
+      const nested = flatToNestedTree(ghTree, repo || (nameInput.value || 'repo'));
+      jsonBox.textContent = JSON.stringify(nested, null, 2);
+      renderTree(nested);
+      msg.innerHTML = '✅ Dépôt prêt : <a target="_blank" href="'+data.html_url+'">'+data.html_url+'</a>';
+
+    } catch (e) {
+      msg.className = 'error';
+      msg.textContent = 'Erreur: ' + (e?.message || e);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  downloadBtn.addEventListener('click', () => {
+    const blob = new Blob([jsonBox.textContent || '{}'], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'flutter_tree.json'; a.click();
+    URL.revokeObjectURL(a.href);
+  });
+  filterInput.addEventListener('input', () => {});
+  clearFilterBtn.addEventListener('click', () => { filterInput.value=''; });
+  copyBtn.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(codeBox.textContent || ''); copyBtn.textContent='Copié ✓'; setTimeout(()=>copyBtn.textContent='Copier',1200); } catch {}
+  });
+  btn.addEventListener('click', generate);
+</script>
 </body>
 </html>
