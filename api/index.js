@@ -1,61 +1,36 @@
 import express from "express";
 import cors from "cors";
+import fs from "fs";
+import path from "path";
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-function buildFlutterSkeleton(projectName = "flutter_app", platforms = []) {
-  const defaultPlatforms = ["android","ios","web","macos","windows","linux"];
-  const plat = new Set(platforms.length ? platforms : defaultPlatforms);
+// Charge le gabarit au démarrage
+const tplPath = path.join(process.cwd(), "template_tree.json");
+if (!fs.existsSync(tplPath)) {
+  console.error("template_tree.json manquant dans /api");
+  process.exit(1);
+}
+const TEMPLATE = JSON.parse(fs.readFileSync(tplPath, "utf-8"));
 
-  const root = { name: projectName, type: "dir", children: [] };
-  const push = (path) => {
-    let node = root;
-    for (const part of path) {
-      const isFile = part.includes(".");
-      node.children ??= [];
-      let next = node.children.find(c => c.name === part);
-      if (!next) {
-        next = { name: part, type: isFile ? "file" : "dir" };
-        if (!isFile) next.children = [];
-        node.children.push(next);
-      }
-      node = next;
-    }
-  };
-
-  // racine
-  push(["pubspec.yaml"]);
-  push(["analysis_options.yaml"]);
-  push([".gitignore"]);
-  push(["README.md"]);
-
-  // sources
-  push(["lib"]);
-  push(["lib","main.dart"]);
-  push(["test"]);
-  push(["assets"]);
-
-  // plateformes
-  for (const p of plat) push([p]);
-
-  return root;
+// Deep-clone + remplace le nom racine
+function buildFromTemplate(projectName = "flutter_studio") {
+  const clone = JSON.parse(JSON.stringify(TEMPLATE));
+  clone.name = projectName || "__PROJECT_NAME__";
+  return clone;
 }
 
 app.post("/generate-tree", (req, res) => {
-  const { projectName = "flutter_app", platforms = [], includeExamples = false } = req.body ?? {};
-  const tree = buildFlutterSkeleton(projectName, platforms);
-
-  if (includeExamples) {
-    const assets = tree.children.find(c => c.name === "assets");
-    assets?.children.push({ name: "images", type: "dir", children: [] });
-    assets?.children.push({ name: "fonts", type: "dir", children: [] });
-    const test = tree.children.find(c => c.name === "test");
-    test?.children.push({ name: "widget_test.dart", type: "file" });
-  }
-
+  const { projectName = "flutter_studio" } = req.body ?? {};
+  const tree = buildFromTemplate(projectName);
   res.json(tree);
+});
+
+// Expose le gabarit brut (debug)
+app.get("/template-tree", (_req, res) => {
+  res.json(TEMPLATE);
 });
 
 app.get("/health", (_req, res) => res.send("ok"));
