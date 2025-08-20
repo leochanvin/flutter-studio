@@ -9,7 +9,7 @@ app.use(cors());
 const GH_OWNER = process.env.GH_OWNER || "leochanvin";
 const TEMPLATE_OWNER = process.env.TEMPLATE_OWNER || "leochanvin";
 const TEMPLATE_REPO = process.env.TEMPLATE_REPO || "flutter-studio-template";
-const GH_TOKEN = process.env.GH_TOKEN; // injecté via Secret Manager
+const GH_TOKEN = process.env.GH_TOKEN;
 
 if (!GH_TOKEN) {
   console.warn("⚠️ GH_TOKEN non défini. Configure un secret gh-token et mappe-le à GH_TOKEN.");
@@ -33,17 +33,8 @@ async function gh(path, opts = {}) {
   return r.json();
 }
 
-// Arbre "simple" par nom de branche (utile quand le dépôt est déjà bien visible)
-async function getRepoTree({ owner, repo, branch = "main" }) {
-  return gh(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(branch)}?recursive=1`
-  );
-}
-
-// ------ Correctif de cohérence éventuelle (409/empty/404) ------
+// ------ Retry multi-stratégies ------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// Convertit la réponse /contents en un arbre minimal {name,type,children}
 function contentsToTree(contents, rootName = "repo") {
   const root = { name: rootName, type: "dir", children: [] };
   for (const item of contents) {
@@ -62,8 +53,6 @@ function contentsToTree(contents, rootName = "repo") {
   }
   return root;
 }
-
-// Aide pour transformer un arbre imbriqué en liste façon /git/trees
 function flattenNestedTree(node, base = "") {
   const items = [];
   if (node.type === "dir" && node.children) {
@@ -75,68 +64,33 @@ function flattenNestedTree(node, base = "") {
   }
   return items;
 }
-
-/**
- * Essaie plusieurs méthodes pour récupérer l'arbre et réessaie jusqu'à readiness.
- * Stratégies par ordre:
- *  A) /git/trees/{branch}?recursive=1
- *  B) /branches/{branch} -> sha -> /git/trees/{sha}?recursive=1
- *  C) /contents?ref={branch}  (converti en shape compatible)
- */
-async function getRepoTreeWithRetry({
-  owner,
-  repo,
-  branch = "main",
-  tries = 60,        // ~2 minutes au total
-  interval = 2000,   // 2s entre essais
-}) {
+async function getRepoTreeWithRetry({ owner, repo, branch = "main", tries = 60, interval = 2000 }) {
   for (let i = 0; i < tries; i++) {
-    // A) direct par nom de branche
     try {
-      const byBranch = await gh(
-        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(branch)}?recursive=1`
-      );
+      const byBranch = await gh(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(branch)}?recursive=1`);
       if (byBranch?.tree?.length) return byBranch;
-    } catch (_) {}
-
-    // B) via SHA du commit de la branche
+    } catch {}
     try {
-      const br = await gh(
-        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodeURIComponent(branch)}`
-      );
+      const br = await gh(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodeURIComponent(branch)}`);
       const sha = br?.commit?.sha;
       if (sha) {
-        const bySha = await gh(
-          `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(sha)}?recursive=1`
-        );
+        const bySha = await gh(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(sha)}?recursive=1`);
         if (bySha?.tree?.length) return bySha;
       }
-    } catch (_) {}
-
-    // C) fallback via /contents
+    } catch {}
     try {
-      const contents = await gh(
-        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents?ref=${encodeURIComponent(branch)}`
-      );
+      const contents = await gh(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents?ref=${encodeURIComponent(branch)}`);
       if (Array.isArray(contents) && contents.length) {
         const minimalTree = contentsToTree(contents, repo);
         return { sha: null, truncated: false, tree: flattenNestedTree(minimalTree) };
       }
-    } catch (_) {}
-
+    } catch {}
     await sleep(interval);
   }
   throw new Error("timeout_waiting_for_repo_ready");
 }
 
-// ----------------------------------------------------------
-
-/**
- * POST /generate-repo
- * Body: { projectName: string, owner?: string, private?: boolean }
- * Effet: crée un nouveau repo GitHub à partir du template GitHub, sans modifier les fichiers.
- * Retour: infos du repo + arbo (tree) pour affichage dans l'UI.
- */
+// ------- Routes -------
 app.post("/generate-repo", async (req, res) => {
   try {
     const projectName = (req.body?.projectName || "flutter_studio").trim();
@@ -146,38 +100,20 @@ app.post("/generate-repo", async (req, res) => {
     if (!projectName) return res.status(400).json({ ok: false, error: "missing_project_name" });
     if (!GH_TOKEN) return res.status(500).json({ ok: false, error: "missing_github_token" });
 
-    // 1) Create repository using template
-    const created = await gh(
-      `/repos/${encodeURIComponent(TEMPLATE_OWNER)}/${encodeURIComponent(TEMPLATE_REPO)}/generate`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          owner,
-          name: projectName,
-          private: isPrivate,
-          include_all_branches: false
-        })
-      }
-    );
+    const created = await gh(`/repos/${encodeURIComponent(TEMPLATE_OWNER)}/${encodeURIComponent(TEMPLATE_REPO)}/generate`, {
+      method: "POST",
+      body: JSON.stringify({ owner, name: projectName, private: isPrivate, include_all_branches: false })
+    });
 
-    // 2) Récupère l’arbo (avec retry jusqu’à ce que le premier commit soit visible)
     const branch = created.default_branch || "main";
-
     let tree = null;
     try {
       tree = await getRepoTreeWithRetry({ owner, repo: created.name, branch });
-    } catch (retryErr) {
-      console.warn("Arbre non prêt après délai, on renvoie tout de même le repo:", retryErr?.message || retryErr);
+    } catch (e) {
+      console.warn("Arbre non prêt après délai, on renvoie quand même:", e.message || e);
     }
 
-    res.json({
-      ok: true,
-      owner,
-      repo: created.name,
-      html_url: created.html_url,
-      default_branch: branch,
-      tree // peut être null si GitHub n'a pas fini l'indexation
-    });
+    res.json({ ok: true, owner, repo: created.name, html_url: created.html_url, default_branch: branch, tree });
   } catch (e) {
     console.error(e);
     res.status(500).json({ ok: false, error: "repo_generation_failed", message: e.message });
@@ -188,7 +124,6 @@ app.get("/repo-info", async (req, res) => {
   try {
     const owner = (req.query.owner || GH_OWNER).trim();
     const repo = (req.query.repo || "").trim();
-    if (!repo) return res.status(400).json({ error: "missing_repo" });
     const branch = (req.query.branch || "main").trim();
     const tree = await getRepoTreeWithRetry({ owner, repo, branch });
     res.json(tree);
