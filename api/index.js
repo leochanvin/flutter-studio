@@ -15,6 +15,7 @@ if (!GH_TOKEN) {
   console.warn("⚠️ GH_TOKEN non défini. Configure un secret gh-token et mappe-le à GH_TOKEN.");
 }
 
+// --- GitHub helpers ---
 async function gh(path, opts = {}) {
   const r = await fetch(`https://api.github.com${path}`, {
     ...opts,
@@ -26,16 +27,61 @@ async function gh(path, opts = {}) {
     }
   });
   if (!r.ok) {
-    const body = await r.text().catch(()=> "");
+    const body = await r.text().catch(() => "");
     throw new Error(`GitHub ${path} -> ${r.status} ${r.statusText}: ${body}`);
   }
   return r.json();
 }
 
-// GET arbo d'un repo (pour l'afficher dans l'UI)
+// Arbre "simple" par nom de branche (utile quand le dépôt est déjà bien visible)
 async function getRepoTree({ owner, repo, branch = "main" }) {
-  return gh(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(branch)}?recursive=1`);
+  return gh(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(branch)}?recursive=1`
+  );
 }
+
+// ------ Correctif de cohérence éventuelle (409/empty) ------
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Attends que la branche existe et que le premier commit soit visible.
+ * Puis lit l'arbre via le SHA du commit (plus fiable que via le nom de branche).
+ */
+async function getRepoTreeWithRetry({
+  owner,
+  repo,
+  branch = "main",
+  tries = 20,
+  interval = 1000
+}) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      // 1) Vérifie que la branche existe et récupère le SHA du commit
+      const br = await gh(
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodeURIComponent(branch)}`
+      );
+      const sha = br?.commit?.sha;
+      if (!sha) throw new Error("branch_has_no_commit");
+
+      // 2) Lit l'arbre par SHA
+      const tree = await gh(
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(sha)}?recursive=1`
+      );
+      return tree;
+    } catch (e) {
+      const msg = String(e?.message || e);
+      // On réessaie sur 404/409/empty le temps que GitHub finalise la génération
+      if (msg.includes("404") || msg.includes("409") || msg.toLowerCase().includes("empty")) {
+        await sleep(interval);
+        continue;
+      }
+      throw e; // autre erreur -> stop
+    }
+  }
+  throw new Error("timeout_waiting_for_repo_ready");
+}
+
+// ----------------------------------------------------------
 
 /**
  * POST /generate-repo
@@ -49,26 +95,26 @@ app.post("/generate-repo", async (req, res) => {
     const owner = (req.body?.owner || GH_OWNER).trim();
     const isPrivate = !!req.body?.private;
 
-    if (!projectName) return res.status(400).json({ ok:false, error:"missing_project_name" });
-    if (!GH_TOKEN) return res.status(500).json({ ok:false, error:"missing_github_token" });
+    if (!projectName) return res.status(400).json({ ok: false, error: "missing_project_name" });
+    if (!GH_TOKEN) return res.status(500).json({ ok: false, error: "missing_github_token" });
 
-    // 1) Appel "Create repository using a template"
-    // Doc: POST /repos/{template_owner}/{template_repo}/generate
-    const payload = {
-      owner,                 // où créer le repo
-      name: projectName,     // nom du repo créé
-      private: isPrivate,
-      include_all_branches: false
-      // optionnel: description, etc.
-    };
-    const created = await gh(`/repos/${encodeURIComponent(TEMPLATE_OWNER)}/${encodeURIComponent(TEMPLATE_REPO)}/generate`, {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
+    // 1) Create repository using template
+    const created = await gh(
+      `/repos/${encodeURIComponent(TEMPLATE_OWNER)}/${encodeURIComponent(TEMPLATE_REPO)}/generate`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          owner,
+          name: projectName,
+          private: isPrivate,
+          include_all_branches: false
+        })
+      }
+    );
 
-    // 2) Récupère l’arborescence (branch par défaut = created.default_branch)
+    // 2) Récupère l’arbo (avec retry jusqu’à ce que le premier commit soit visible)
     const branch = created.default_branch || "main";
-    const tree = await getRepoTree({ owner, repo: created.name, branch });
+    const tree = await getRepoTreeWithRetry({ owner, repo: created.name, branch });
 
     res.json({
       ok: true,
@@ -80,7 +126,7 @@ app.post("/generate-repo", async (req, res) => {
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ ok:false, error:"repo_generation_failed", message: e.message });
+    res.status(500).json({ ok: false, error: "repo_generation_failed", message: e.message });
   }
 });
 
@@ -90,7 +136,7 @@ app.get("/repo-info", async (req, res) => {
     const repo = (req.query.repo || "").trim();
     if (!repo) return res.status(400).json({ error: "missing_repo" });
     const branch = (req.query.branch || "main").trim();
-    const tree = await getRepoTree({ owner, repo, branch });
+    const tree = await getRepoTreeWithRetry({ owner, repo, branch });
     res.json(tree);
   } catch (e) {
     res.status(500).json({ error: "repo_info_failed", message: e.message });
