@@ -54,11 +54,10 @@
 <body>
   <header>
     <h1>Flutter Project Tree</h1>
-    <div class="hint">Clique “Générer” pour dupliquer le template en repo GitHub.</div>
+    <div class="hint">Saisis le nom du projet puis clique “Générer” pour dupliquer le template en repo GitHub.</div>
 
     <div class="toolbar">
       <input id="name" placeholder="projectName" value="MonAppli" />
-      <input id="owner" placeholder="owner GitHub" value="leochanvin" />
       <button id="go" class="primary">Générer</button>
       <button id="downloadJson">Télécharger JSON</button>
     </div>
@@ -97,7 +96,6 @@
     const btn = document.getElementById('go');
     const msg = document.getElementById('msg');
     const nameInput = document.getElementById('name');
-    const ownerInput = document.getElementById('owner');
     const downloadBtn = document.getElementById('downloadJson');
     const filterInput = document.getElementById('filter');
     const clearFilterBtn = document.getElementById('clearFilter');
@@ -150,9 +148,10 @@
     }
 
     async function generate(){
-      msg.textContent=''; msg.className='status'; out.textContent='...';
+      msg.textContent=''; 
+      btn.disabled = true;
+      msg.className = 'status'; msg.textContent = 'Création du dépôt…';
       const projectName = nameInput.value.trim();
-      const owner = ownerInput.value.trim() || 'leochanvin';
 
       let endpoint = API_BASE.replace(/\/$/, '') + '/generate-repo';
 
@@ -160,7 +159,7 @@
         const r = await fetch(endpoint, {
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ projectName, owner, private: false })
+          body: JSON.stringify({ projectName, private: false })
         });
         if(!r.ok){
           const t = await r.text();
@@ -176,6 +175,8 @@
       }catch(e){
         msg.textContent = 'Erreur ' + (e.message || e);
         msg.className = 'error';
+      } finally {
+        btn.disabled = false;
       }
     }
 
