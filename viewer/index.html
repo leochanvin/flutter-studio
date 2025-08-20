@@ -54,14 +54,12 @@
 <body>
   <header>
     <h1>Flutter Project Tree</h1>
-    <div class="hint">Colle l’URL Cloud Run (ex: https://…/generate-tree), puis “Générer” ou “Créer Repo GitHub”.</div>
+    <div class="hint">Colle l’URL Cloud Run (ex: https://…/generate-repo ou la racine du service), puis “Générer” (duplique le template en repo GitHub).</div>
 
     <div class="toolbar">
-      <input id="api" placeholder="https://YOUR-CLOUD-RUN-URL/generate-tree" style="min-width:360px;flex:1 1 320px" />
       <input id="name" placeholder="projectName" value="MonAppli" />
       <input id="owner" placeholder="owner GitHub" value="leochanvin" />
       <button id="go" class="primary">Générer</button>
-      <button id="createRepo">Créer Repo GitHub</button>
       <button id="downloadJson">Télécharger JSON</button>
     </div>
   </header>
@@ -97,9 +95,7 @@
     const out = document.getElementById('out');
     const jsonBox = document.getElementById('json');
     const btn = document.getElementById('go');
-    const repoBtn = document.getElementById('createRepo');
     const msg = document.getElementById('msg');
-    const apiInput = document.getElementById('api');
     const nameInput = document.getElementById('name');
     const ownerInput = document.getElementById('owner');
     const downloadBtn = document.getElementById('downloadJson');
@@ -154,37 +150,35 @@
 
     async function generate(){
       msg.textContent=''; msg.className='status'; out.textContent='...';
-      const api=apiInput.value.trim();
-      const projectName=nameInput.value.trim();
-      if(!api) return msg.textContent='⚠️ API manquante';
-      try{
-        const r=await fetch(api,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({projectName})});
-        const data=await r.json();
-        currentTree=data;
-        jsonBox.textContent=JSON.stringify(data,null,2);
-        renderTree(data);
-        msg.textContent='✅ Arbo générée';
-      }catch(e){msg.textContent='Erreur '+e; msg.className='error';}
-    }
+      const projectName = nameInput.value.trim();
+      const owner = ownerInput.value.trim() || 'leochanvin';
 
-    async function createRepo(){
-      msg.textContent=''; msg.className='status'; out.textContent='...';
-      const base=apiInput.value.trim();
-      if(!base){msg.textContent='⚠️ API manquante';return;}
-      const apiRepo=base.replace(/\/generate-tree$/,'/generate-repo');
+      let endpoint = '/generate-repo';
+
       try{
-        const r=await fetch(apiRepo,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({projectName:nameInput.value.trim(),owner:ownerInput.value.trim()})});
-        const data=await r.json();
-        if(!data.ok) throw new Error(data.message);
-        currentTree=data.tree;
-        jsonBox.textContent=JSON.stringify(data.tree,null,2);
+        const r = await fetch(endpoint, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ projectName, owner, private: false })
+        });
+        if(!r.ok){
+          const t = await r.text();
+          throw new Error(`${r.status} ${r.statusText} - ${t}`);
+        }
+        const data = await r.json();
+        if(!data.ok) throw new Error(data.message || 'Erreur inconnue');
+
+        currentTree = data.tree;
+        jsonBox.textContent = JSON.stringify(data.tree, null, 2);
         renderTree(data.tree);
-        msg.innerHTML='✅ Repo créé: <a href="'+data.html_url+'" target="_blank">'+data.html_url+'</a>';
-      }catch(e){msg.textContent='Erreur '+e; msg.className='error';}
+        msg.innerHTML = '✅ Repo créé: <a href="'+data.html_url+'" target="_blank">'+data.html_url+'</a>';
+      }catch(e){
+        msg.textContent = 'Erreur ' + (e.message || e);
+        msg.className = 'error';
+      }
     }
 
     btn.addEventListener('click',generate);
-    repoBtn.addEventListener('click',createRepo);
     downloadBtn.addEventListener('click',()=>{const blob=new Blob([jsonBox.textContent],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='flutter_tree.json';a.click();});
     copyBtn.addEventListener('click',async()=>{await navigator.clipboard.writeText(codeBox.textContent||'');copyBtn.textContent='Copié ✓';setTimeout(()=>copyBtn.textContent='Copier',1200);});
   </script>
