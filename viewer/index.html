@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <title>Flutter Project Tree Viewer</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; }
+    .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    input, button { padding: 8px; }
+    details { margin-left: 14px; }
+    .file { margin-left: 28px; }
+    .tree { line-height: 1.6; }
+    .hint { color: #666; font-size: 0.9rem; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Flutter Project Tree</h1>
+  <div class="hint">Colle l’URL Cloud Run (ex: https://…/generate-tree), puis “Générer”.</div>
+
+  <div class="controls">
+    <input id="api" placeholder="https://YOUR-CLOUD-RUN-URL/generate-tree" style="min-width:360px" />
+    <input id="name" placeholder="projectName" value="MonAppli" />
+    <input id="platforms" placeholder="platforms (csv)" value="android,ios,web" />
+    <label><input type="checkbox" id="examples" checked> includeExamples</label>
+    <button id="go">Générer</button>
+  </div>
+
+  <pre id="json" style="background:#f7f7f7;padding:12px;border-radius:8px;overflow:auto;max-height:220px"></pre>
+  <div id="out" class="tree"></div>
+
+  <script>
+    const out = document.getElementById('out');
+    const jsonBox = document.getElementById('json');
+
+    const el = (tag, attrs={}, ...children) => {
+      const n = document.createElement(tag);
+      for (const [k,v] of Object.entries(attrs)) n.setAttribute(k,v);
+      for (const c of children) n.append(c);
+      return n;
+    };
+
+    function renderNode(node) {
+      if (node.type === 'dir') {
+        const d = el('details', { open: true });
+        const s = el('summary'); s.textContent = `📁 ${node.name}`;
+        d.append(s);
+        (node.children || [])
+          .sort((a,b)=> a.type===b.type ? a.name.localeCompare(b.name) : (a.type==="dir"?-1:1))
+          .forEach(child => d.append(renderNode(child)));
+        return d;
+      }
+      const f = el('div', { class: 'file' });
+      f.textContent = `📄 ${node.name}`;
+      return f;
+    }
+
+    async function generate() {
+      out.textContent = "Chargement…";
+      jsonBox.textContent = "";
+
+      const api = document.getElementById('api').value.trim();
+      const projectName = document.getElementById('name').value.trim() || 'flutter_app';
+      const platforms = (document.getElementById('platforms').value || '')
+        .split(',').map(s => s.trim()).filter(Boolean);
+      const includeExamples = document.getElementById('examples').checked;
+
+      if (!api) { out.textContent = "⚠️ Renseigne l’URL de l’API Cloud Run."; return; }
+
+      const res = await fetch(api, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectName, platforms, includeExamples })
+      });
+      if (!res.ok) {
+        out.textContent = "Erreur API: " + res.status + " " + res.statusText;
+        return;
+      }
+      const data = await res.json();
+
+      jsonBox.textContent = JSON.stringify(data, null, 2);
+      out.innerHTML = "";
+      out.append(renderNode(data));
+    }
+
+    document.getElementById('go').addEventListener('click', generate);
+  </script>
+</body>
+</html>
